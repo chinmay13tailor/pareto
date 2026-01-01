@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Downtime Pareto Report</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<!-- Plotly -->
+<script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
+
+<style>
+  body {
+    font-family: "Segoe UI", sans-serif;
+    background: #f3f4f6;
+    margin: 0;
+    color: #1e293b;
+  }
+  .page {
+    padding: 20px;
+  }
+  .card {
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 16px 20px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.08);
+    margin-bottom: 20px;
+  }
+  h2 {
+    margin: 0 0 14px;
+    color: #1e3a8a;
+    font-size: 18px;
+  }
+  .filters {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  select, button {
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid #cbd5e1;
+    font-size: 14px;
+  }
+  button {
+    background: #2563eb;
+    color: #fff;
+    border: none;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  button:hover {
+    background: #1d4ed8;
+  }
+  #status {
+    font-size: 14px;
+    color: #475569;
+  }
+  #paretoChart {
+    height: 420px;
+  }
+</style>
+</head>
+
+<body>
+<div class="page">
+
+  <!-- FILTERS -->
+  <div class="card">
+    <h2>Downtime Pareto – Time Selection</h2>
+    <div class="filters">
+      <label>Range:</label>
+      <select id="timeRange">
+        <option value="24H">Last 24 Hours</option>
+        <option value="WEEK">This Week</option>
+        <option value="MONTH">This Month</option>
+      </select>
+      <button onclick="generatePareto()">Generate</button>
+      <span id="status">—</span>
+    </div>
+  </div>
+
+  <!-- PARETO CHART -->
+  <div class="card">
+    <h2>Downtime Pareto Chart</h2>
+    <div id="paretoChart"></div>
+  </div>
+
+</div>
+
+<script>
+/* =========================
+   CONFIGURATION
+========================= */
+const CONFIG = {
+  API_BASE_URL: "https://plantwiz.pimateck.in/api",
+  DEVICE_ID: "eYCrVFMOc49glKbVyKwK",
+  KEYS: [
+    "Downtime_Start_Time",
+    "Downtime_End_Time",
+    "Downtime_Duration",
+    "Downtime_Description",
+    "Downtime_Reason_Code"
+  ]
+};
+
+/* =========================
+   JWT FROM URL
+========================= */
+const qs = new URLSearchParams(location.search);
+const JWT = qs.get("token") || "";
+
+/* =========================
+   TIME RANGE LOGIC
+========================= */
+function getParetoRange(type) {
+  const now = Date.now();
+  let startTs;
+
+  if (type === "24H") {
+    startTs = now - (24 * 60 * 60 * 1000);
+  }
+  else if (type === "WEEK") {
+    const d = new Date();
+    d.setHours(0,0,0,0);
+    d.setDate(d.getDate() - d.getDay());
+    startTs = d.getTime();
+  }
+  else if (type === "MONTH") {
+    const d = new Date();
+    d.setHours(0,0,0,0);
+    d.setDate(1);
+    startTs = d.getTime();
+  }
+
+  return { startTs, endTs: now };
+}
+
+/* =========================
+   FETCH DOWNTIME DATA
+========================= */
+async function fetchDowntime(startTs, endTs) {
+  const url =
+    `${CONFIG.API_BASE_URL}/plugins/telemetry/DEVICE/${CONFIG.DEVICE_ID}/values/timeseries` +
+    `?keys=${CONFIG.KEYS.join(",")}` +
+    `&startTs=${startTs}&endTs=${endTs}&limit=1000&agg=NONE`;
+
+  const res = await fetch(url, {
+    headers: { "X-Authorization": `Bearer ${JWT}` }
+  });
+
+  if (!res.ok) throw new Error(res.statusText);
+  return res.json();
+}
+
+/* =========================
+   MERGE TIMESERIES
+========================= */
+function mergeSeries(obj) {
+  const map = new Map();
+
+  for (const [key, arr] of Object.entries(obj)) {
+    (arr || []).forEach(p => {
+      const ts = +p.ts;
+      const row = map.get(ts) || { ts };
+      row[key] = p.value;
+      map.set(ts, row);
+    });
+  }
+
+  return Array.from(map.values());
+}
+
+/* =========================
+   BUILD PARETO DATA
+========================= */
+function buildPareto(rows) {
+  const reasonMap = {};
+
+  rows.forEach(r => {
+    const reason = r.Downtime_Reason_Code || "UNKNOWN";
+    const duration = Number(r.Downtime_Duration) || 0;
+    reasonMap[reason] = (reasonMap[reason] || 0) + duration;
+  });
+
+  const sorted = Object.entries(reasonMap)
+    .map(([reason, minutes]) => ({ reason, minutes }))
+    .sort((a, b) => b.minutes - a.minutes);
+
+  const total = sorted.reduce((s, x) => s + x.minutes, 0);
+  let cum = 0;
+
+  return sorted.map(d => {
+    cum += d.minutes;
+    return {
+      ...d,
+      cumPercent: total ? (cum / total) * 100 : 0
+    };
+  });
+}
+
+/* =========================
+   RENDER PARETO CHART
+========================= */
+function renderPareto(data) {
+  if (!data.length) {
+    Plotly.purge("paretoChart");
+    return;
+  }
+
+  Plotly.newPlot("paretoChart", [
+    {
+      x: data.map(d => d.reason),
+      y: data.map(d => d.minutes),
+      type: "bar",
+      name: "Downtime (min)",
+      marker: { color: "#ef4444" }
+    },
+    {
+      x: data.map(d => d.reason),
+      y: data.map(d => d.cumPercent),
+      type: "scatter",
+      yaxis: "y2",
+      mode: "lines+markers",
+      name: "Cumulative %",
+      line: { color: "#2563eb", width: 3 }
+    }
+  ], {
+    title: "Downtime Pareto Analysis",
+    margin: { t: 50, l: 60, r: 60, b: 80 },
+    yaxis: { title: "Downtime (Minutes)" },
+    yaxis2: {
+      title: "Cumulative %",
+      overlaying: "y",
+      side: "right",
+      range: [0, 100]
+    },
+    paper_bgcolor: "#ffffff",
+    plot_bgcolor: "#ffffff",
+    font: { color: "#1e293b" }
+  }, { displaylogo: false });
+}
+
+/* =========================
+   MAIN GENERATE FUNCTION
+========================= */
+async function generatePareto() {
+  const status = document.getElementById("status");
+  const range = document.getElementById("timeRange").value;
+
+  try {
+    status.textContent = "Loading...";
+    const { startTs, endTs } = getParetoRange(range);
+    const raw = await fetchDowntime(startTs, endTs);
+    const rows = mergeSeries(raw);
+    const pareto = buildPareto(rows);
+    renderPareto(pareto);
+    status.textContent = "Generated ✅";
+  }
+  catch (e) {
+    console.error(e);
+    alert("Failed to load downtime data");
+    status.textContent = "Error ⚠️";
+  }
+}
+</script>
+
+</body>
+</html>
