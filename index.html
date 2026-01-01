@@ -119,14 +119,12 @@ function getParetoRange(type) {
 
   if (type === "24H") {
     startTs = now - (24 * 60 * 60 * 1000);
-  }
-  else if (type === "WEEK") {
+  } else if (type === "WEEK") {
     const d = new Date();
     d.setHours(0,0,0,0);
     d.setDate(d.getDate() - d.getDay());
     startTs = d.getTime();
-  }
-  else if (type === "MONTH") {
+  } else if (type === "MONTH") {
     const d = new Date();
     d.setHours(0,0,0,0);
     d.setDate(1);
@@ -172,35 +170,44 @@ function mergeSeries(obj) {
 }
 
 /* =========================
-   BUILD PARETO DATA
+   BUILD PARETO DATA (UPDATED)
 ========================= */
 function buildPareto(rows) {
   const reasonMap = {};
 
   rows.forEach(r => {
-    const reason = r.Downtime_Reason_Code || "UNKNOWN";
+    const reason =
+      r.Downtime_Description ||
+      r.Downtime_Reason_Code ||
+      "UNKNOWN";
+
     const duration = Number(r.Downtime_Duration) || 0;
-    reasonMap[reason] = (reasonMap[reason] || 0) + duration;
+
+    if (duration > 0) {
+      reasonMap[reason] = (reasonMap[reason] || 0) + duration;
+    }
   });
 
+  // Sort by highest downtime first (MANDATORY)
   const sorted = Object.entries(reasonMap)
     .map(([reason, minutes]) => ({ reason, minutes }))
     .sort((a, b) => b.minutes - a.minutes);
 
   const total = sorted.reduce((s, x) => s + x.minutes, 0);
-  let cum = 0;
 
+  let cumulative = 0;
   return sorted.map(d => {
-    cum += d.minutes;
+    cumulative += d.minutes;
     return {
-      ...d,
-      cumPercent: total ? (cum / total) * 100 : 0
+      reason: d.reason,
+      minutes: d.minutes,
+      cumPercent: total ? (cumulative / total) * 100 : 0
     };
   });
 }
 
 /* =========================
-   RENDER PARETO CHART
+   RENDER PARETO CHART (UPDATED)
 ========================= */
 function renderPareto(data) {
   if (!data.length) {
@@ -227,14 +234,21 @@ function renderPareto(data) {
     }
   ], {
     title: "Downtime Pareto Analysis",
-    margin: { t: 50, l: 60, r: 60, b: 80 },
-    yaxis: { title: "Downtime (Minutes)" },
+    xaxis: {
+      title: "Downtime Reason",
+      type: "category",
+      tickangle: -25
+    },
+    yaxis: {
+      title: "Downtime (Minutes)"
+    },
     yaxis2: {
       title: "Cumulative %",
       overlaying: "y",
       side: "right",
       range: [0, 100]
     },
+    margin: { t: 50, l: 60, r: 60, b: 120 },
     paper_bgcolor: "#ffffff",
     plot_bgcolor: "#ffffff",
     font: { color: "#1e293b" }
@@ -256,8 +270,7 @@ async function generatePareto() {
     const pareto = buildPareto(rows);
     renderPareto(pareto);
     status.textContent = "Generated ✅";
-  }
-  catch (e) {
+  } catch (e) {
     console.error(e);
     alert("Failed to load downtime data");
     status.textContent = "Error ⚠️";
