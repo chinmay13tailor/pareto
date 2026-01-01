@@ -59,6 +59,10 @@
   #paretoChart {
     height: 420px;
   }
+  .insight p {
+    margin: 10px 0;
+    line-height: 1.5;
+  }
 </style>
 </head>
 
@@ -84,6 +88,23 @@
   <div class="card">
     <h2>Downtime Pareto Chart</h2>
     <div id="paretoChart"></div>
+  </div>
+
+  <!-- PARETO INSIGHTS -->
+  <div class="card insight">
+    <h2>Downtime Pareto Insights (This Machine)</h2>
+
+    <p><strong>1. Which downtime reasons cause maximum production loss?</strong><br>
+      <span id="q1">—</span>
+    </p>
+
+    <p><strong>2. Where should maintenance / improvement efforts focus?</strong><br>
+      <span id="q2">—</span>
+    </p>
+
+    <p><strong>3. What problems should be solved first?</strong><br>
+      <span id="q3">—</span>
+    </p>
   </div>
 
 </div>
@@ -170,7 +191,7 @@ function mergeSeries(obj) {
 }
 
 /* =========================
-   BUILD PARETO DATA (UPDATED)
+   BUILD PARETO DATA
 ========================= */
 function buildPareto(rows) {
   const reasonMap = {};
@@ -188,7 +209,6 @@ function buildPareto(rows) {
     }
   });
 
-  // Sort by highest downtime first (MANDATORY)
   const sorted = Object.entries(reasonMap)
     .map(([reason, minutes]) => ({ reason, minutes }))
     .sort((a, b) => b.minutes - a.minutes);
@@ -207,7 +227,7 @@ function buildPareto(rows) {
 }
 
 /* =========================
-   RENDER PARETO CHART (UPDATED)
+   RENDER PARETO CHART
 ========================= */
 function renderPareto(data) {
   if (!data.length) {
@@ -239,20 +259,46 @@ function renderPareto(data) {
       type: "category",
       tickangle: -25
     },
-    yaxis: {
-      title: "Downtime (Minutes)"
-    },
+    yaxis: { title: "Downtime (Minutes)" },
     yaxis2: {
       title: "Cumulative %",
       overlaying: "y",
       side: "right",
       range: [0, 100]
     },
-    margin: { t: 50, l: 60, r: 60, b: 120 },
-    paper_bgcolor: "#ffffff",
-    plot_bgcolor: "#ffffff",
-    font: { color: "#1e293b" }
+    margin: { t: 50, l: 60, r: 60, b: 120 }
   }, { displaylogo: false });
+}
+
+/* =========================
+   PARETO INSIGHT ANSWERS
+========================= */
+function renderInsights(pareto) {
+  const q1 = document.getElementById("q1");
+  const q2 = document.getElementById("q2");
+  const q3 = document.getElementById("q3");
+
+  if (!pareto.length) {
+    q1.textContent = q2.textContent = q3.textContent = "No data available.";
+    return;
+  }
+
+  // Q1: Top 3 reasons
+  const top3 = pareto.slice(0, 3).map(p => p.reason);
+  q1.textContent =
+    `${top3.join(", ")} contribute the maximum production loss on this machine.`;
+
+  // Q2: Reasons contributing up to ~80%
+  const focus = pareto.filter(p => p.cumPercent <= 80).map(p => p.reason);
+  q2.textContent =
+    `Maintenance and improvement efforts should focus on ${focus.join(", ")}, as these together contribute nearly 80% of total downtime.`;
+
+  // Q3: First problems to solve
+  const first = pareto[0].reason;
+  const second = pareto[1]?.reason;
+  q3.textContent = second
+    ? `${first} should be addressed first, followed by ${second}, to achieve the fastest reduction in downtime.`
+    : `${first} should be addressed first to achieve the fastest reduction in downtime.`;
 }
 
 /* =========================
@@ -269,6 +315,7 @@ async function generatePareto() {
     const rows = mergeSeries(raw);
     const pareto = buildPareto(rows);
     renderPareto(pareto);
+    renderInsights(pareto);
     status.textContent = "Generated ✅";
   } catch (e) {
     console.error(e);
